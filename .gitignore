@@ -1,0 +1,57 @@
+# Ruby関連
+*.gem
+*.rbc
+/.config
+/coverage/
+/InstalledFiles
+/pkg/
+/spec/reports/
+/spec/examples.txt
+/test/tmp/
+/test/version_tmp/
+/tmp/
+
+# Bundler
+/.bundle/
+/vendor/bundle
+/lib/bundler/man/
+
+# 環境変数ファイル
+.env
+.env.local
+
+# ログファイル
+*.log
+
+# OS関連
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# エディタ関連
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# MP3ファイル（テスト用のサンプルファイルを除外）
+*.mp3
+
+# データディレクトリ（テストデータなど）
+data/
+data2/
+bad_data/
+
+# 一時ファイル
+*.tmp
+*.bak
+*.cache
+*.sv
+*.back
