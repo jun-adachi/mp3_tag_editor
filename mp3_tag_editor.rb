@@ -9,7 +9,13 @@ require 'optparse'
 # MP3タグ編集ライブラリの読み込み（id3tagのみ使用）
 
 def debug_puts(message)
-  puts message if ENV['MP3_TAG_EDITOR_DEBUG'] == 'true'
+  # 環境変数またはverboseフラグのどちらかが有効な場合に出力
+  should_output = ENV['MP3_TAG_EDITOR_DEBUG'] == 'true'
+  # optionsが定義されている場合、verboseフラグもチェック
+  if defined?(options) && options.is_a?(Hash) && options[:verbose]
+    should_output = true
+  end
+  puts message if should_output
 end
 
 begin
@@ -44,7 +50,7 @@ options = {
 }
 
 parser = OptionParser.new do |opts|
-  opts.banner = "使用方法: #{$0} [オプション]"
+  opts.banner = "使用方法: #{$0} [オプション] [ファイル...]"
   opts.separator ""
   opts.separator "オプション:"
   
@@ -356,7 +362,27 @@ module ID3v2Editor
       # 既存タグの後のデータを追加
       if has_existing_tag
         audio_start = existing_tag_size
-        new_content << file_content[audio_start..-1] if audio_start < file_size
+        
+        # 既存タグのサイズフィールドが破損している場合（ファイルサイズを超える）を検出
+        if audio_start >= file_size
+          # 破損したサイズフィールドの場合、実際のオーディオデータの開始位置を検索
+          actual_audio_start = find_mp3_audio_start(file_content, HEADER_SIZE)
+          
+          if actual_audio_start.nil?
+            # オーディオデータの開始位置が見つからない場合、データ損失を防ぐためエラーを発生
+            raise "エラー: #{file_path} のID3v2タグのサイズフィールドが破損しており、オーディオデータの開始位置を特定できません。データ損失を防ぐため、書き込みを中止しました。"
+          end
+          
+          audio_start = actual_audio_start
+        end
+        
+        # オーディオデータを追加
+        if audio_start < file_size
+          new_content << file_content[audio_start..-1]
+        else
+          # オーディオデータが存在しない場合もエラー
+          raise "エラー: #{file_path} にオーディオデータが見つかりません。データ損失を防ぐため、書き込みを中止しました。"
+        end
       else
         # ID3v2タグがない場合、ファイル全体をそのまま追加
         new_content << file_content
@@ -541,6 +567,31 @@ module ID3v2Editor
       end
       result
     end
+    
+    def find_mp3_audio_start(file_content, search_start)
+      # MP3フレーム同期パターンを検索（0xFF 0xE0-0xFF）
+      # 検索範囲: search_startからファイルサイズまで（最大1MBまで検索）
+      max_search_size = [1024 * 1024, file_content.length - search_start].min
+      search_end = search_start + max_search_size
+      
+      (search_start...search_end - 1).each do |i|
+        # MP3フレーム同期パターン: 0xFF 0xE0-0xFF (11ビットが1)
+        if file_content.getbyte(i) == 0xFF
+          next_byte = file_content.getbyte(i + 1)
+          # 上位3ビットが111 (0xE0-0xFF) の場合、MP3フレーム同期の可能性が高い
+          if next_byte && (next_byte & 0xE0) == 0xE0
+            # より確実にするため、次のバイトも確認（MP3ヘッダーの一部）
+            # MP3ヘッダーは4バイト: 0xFF 0xE0-0xFF 0xXX 0xXX
+            # 3バイト目は通常0x00-0xFFの範囲
+            if i + 2 < file_content.length
+              return i
+            end
+          end
+        end
+      end
+      
+      nil
+    end
   end
 end
 
@@ -722,12 +773,15 @@ end
 # ファイル名からトラック番号とタイトルを抽出する関数
 def parse_file_name(file_path)
   filename = File.basename(file_path)
-  pattern = /^(\d+)[\s_-]([^\.]+)\.mp3$/i
+  pattern = /^(\d+)[\s_-](.+)\.mp3$/i
   
   match = filename.match(pattern)
   if match
     track_nr = match[1].to_i
     title = match[2].strip
+    # タイトルが空文字列の場合はnilを返す（不正なファイル名として扱う）
+    return nil if title.empty?
+    
     # エンコーディングをUTF-8に統一
     begin
       if title.encoding != Encoding::UTF_8
@@ -736,6 +790,9 @@ def parse_file_name(file_path)
     rescue Encoding::UndefinedConversionError, Encoding::InvalidByteSequenceError
       title = title.force_encoding('UTF-8').encode('UTF-8', invalid: :replace, undef: :replace)
     end
+    # エンコーディング変換後も空文字列でないことを確認
+    return nil if title.strip.empty?
+    
     { track_nr: track_nr, title: title }
   else
     nil
@@ -763,16 +820,10 @@ def edit_mp3_tags(file_path, artist: nil, album: nil, title: nil, track_nr: nil,
     
     # どちらも更新しない場合
     unless update_id3v1 || update_id3v2
-      if !existing_id3v1 && !existing_id3v2
-        puts "エラー: #{file_path} にはID3v1タグもID3v2タグも存在しません。--force-id3v1 または --force-id3v2 オプションを使用してください。"
-        return false
-      elsif !existing_id3v1
-        puts "エラー: #{file_path} にはID3v1タグが存在しません。--force-id3v1 オプションを使用してください。"
-        return false
-      elsif !existing_id3v2
-        puts "エラー: #{file_path} にはID3v2タグが存在しません。--force-id3v2 オプションを使用してください。"
-        return false
-      end
+      # このブロックに入る時点で、force_id3v1 と force_id3v2 が false の場合、
+      # 両方の existing_id3v1 と existing_id3v2 が false であることが確定している
+      puts "エラー: #{file_path} にはID3v1タグもID3v2タグも存在しません。--force-id3v1 または --force-id3v2 オプションを使用してください。"
+      return false
     end
 
     if dry_run
@@ -1152,6 +1203,7 @@ else
   
   success_count = 0
   fail_count = 0
+  skipped_count = 0
   
   mp3_files.each do |file|
     # ファイル名からトラック番号とタイトルを抽出
@@ -1172,6 +1224,7 @@ else
         elsif options[:dry_run]
           puts "[DRY RUN] スキップ: #{file} - ファイル名がパターンに一致しません"
         end
+        skipped_count += 1
         next
       end
     end
@@ -1197,5 +1250,8 @@ else
   puts "=== 処理完了 ==="
   puts "成功: #{success_count}個"
   puts "失敗: #{fail_count}個"
+  if skipped_count > 0
+    puts "スキップ: #{skipped_count}個"
+  end
 end
 
