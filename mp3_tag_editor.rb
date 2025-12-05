@@ -9,7 +9,13 @@ require 'optparse'
 # MP3タグ編集ライブラリの読み込み（id3tagのみ使用）
 
 def debug_puts(message)
-  puts message if ENV['MP3_TAG_EDITOR_DEBUG'] == 'true'
+  # 環境変数またはverboseフラグのどちらかが有効な場合に出力
+  should_output = ENV['MP3_TAG_EDITOR_DEBUG'] == 'true'
+  # optionsが定義されている場合、verboseフラグもチェック
+  if defined?(options) && options.is_a?(Hash) && options[:verbose]
+    should_output = true
+  end
+  puts message if should_output
 end
 
 begin
@@ -773,6 +779,9 @@ def parse_file_name(file_path)
   if match
     track_nr = match[1].to_i
     title = match[2].strip
+    # タイトルが空文字列の場合はnilを返す（不正なファイル名として扱う）
+    return nil if title.empty?
+    
     # エンコーディングをUTF-8に統一
     begin
       if title.encoding != Encoding::UTF_8
@@ -781,6 +790,9 @@ def parse_file_name(file_path)
     rescue Encoding::UndefinedConversionError, Encoding::InvalidByteSequenceError
       title = title.force_encoding('UTF-8').encode('UTF-8', invalid: :replace, undef: :replace)
     end
+    # エンコーディング変換後も空文字列でないことを確認
+    return nil if title.strip.empty?
+    
     { track_nr: track_nr, title: title }
   else
     nil
